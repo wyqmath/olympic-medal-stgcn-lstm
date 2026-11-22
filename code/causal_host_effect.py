@@ -29,10 +29,11 @@ def build_samples(panel_path):
     df = feols.add_logvars(df)
 
     df = df.sort_values(["ioc", "year"], kind="mergesort").copy()
-    df["lag1_total"] = df.groupby("ioc")["total"].shift(1)
-    eds = sorted(df["year"].unique().tolist())
-    prev_ed = {eds[i]: eds[i - 1] for i in range(1, len(eds))}
-    df["prev_edition"] = df["year"].map(prev_ed)
+    prior = df.groupby("ioc")[["total", "year"]].shift(1)
+    df["lag1_total"] = prior["total"]
+    editions = sorted(df["year"].unique())
+    previous_edition = dict(zip(editions[1:], editions[:-1]))
+    df["lag_from_previous_edition"] = prior["year"].eq(df["year"].map(previous_edition))
 
     modern = df[(df["year"] >= YEAR_MIN) & (df["year"] <= YEAR_MAX)].copy()
     n_modern = len(modern)
@@ -40,7 +41,6 @@ def build_samples(panel_path):
     for c in COVS:
         fin &= np.isfinite(modern[c].to_numpy(float))
     cc = modern[fin].copy()
-    cc["lag_from_previous_edition"] = (cc["prev_edition"] == cc["year"] - 4)
 
     meta = dict(meta)
     meta.update(
@@ -262,10 +262,10 @@ def treatment_effect_block(cc, pt, reps, meta, methods):
                                 % (md["n_matched"], md["n_treated"],
                                    md["n_treated_dropped_by_caliper"]))
             if outcome == "log1p_total":
-                pct = float(np.exp(tau_pt) - 1.0)
+                pct = float(np.expm1(tau_pt))
                 row.update(pct_effect=pct, multiplier_exp_tau=float(np.exp(tau_pt)),
-                           medals_per_typical_country=pct * meta["mean_total_sample"],
-                           medals_att_treated_rows=pct * meta["mean_total_treated"])
+                           medals_per_typical_country=pct * (meta["mean_total_sample"] + 1),
+                           medals_att_treated_rows=pct * (meta["mean_total_treated"] + 1))
             rows.append(row)
             effects.setdefault(method, {})[outcome] = dict(
                 tau=tau_pt, ci_low=st["ci_low"], ci_high=st["ci_high"],
@@ -455,6 +455,7 @@ def moderation(cc, n_boot, seed, outdir):
     mod_skips = dict(FE_SKIPS)
     boot = {g: pct_ci(v) for g, v in draws.items()}
     mean_total = float(Z["total"].mean())
+    host_counts = d.loc[d["host_flag"] == 1, "gdp_pc_tercile"].value_counts()
 
     mfx = {}
     for g, val in (("low", coef["host_flag"]),
@@ -462,11 +463,12 @@ def moderation(cc, n_boot, seed, outdir):
                    ("high", coef["host_flag"] + coef["T_x_high"])):
         st = boot[g]
         z = val / st["boot_se"] if st["boot_se"] else np.nan
-        mfx[g] = dict(marginal_effect=val, boot_ci_low=st["ci_low"],
+        mfx[g] = dict(marginal_effect=val, host_count=int(host_counts.get(g, 0)),
+                      boot_ci_low=st["ci_low"],
                       boot_ci_high=st["ci_high"], boot_se=st["boot_se"],
                       boot_reps=st["boot_reps"], boot_z=z,
                       boot_p=float(2 * (1 - 0.5 * (1 + erf(abs(z) / np.sqrt(2))))) if z == z else np.nan,
-                      medals_per_typical_country=float((np.exp(val) - 1.0) * mean_total))
+                      medals_per_typical_country=float(np.expm1(val) * (mean_total + 1)))
 
     src_fe, src_boot = "FE cluster-robust SE (analytic)", "country-cluster bootstrap"
     table = [dict(term=t, coef=srows[t]["beta"], se=srows[t]["se"], p=srows[t]["p"],
@@ -511,7 +513,7 @@ def moderation(cc, n_boot, seed, outdir):
 
 def read_anchors():
     src = HERE / "gen" / "econometrics_host_effect_results.json"
-    out = {"source_file": str(src)}
+    out = {"source_file": src.relative_to(HERE).as_posix()}
     try:
         specs = json.loads(src.read_text())["specs"]
     except Exception:
@@ -591,12 +593,11 @@ def fig_decomposition(results, path):
         plt.rcParams.update(_base)
     med = results["mediation"]["log1p_total"]["summary"]
     boot = results["mediation"]["bootstrap"]["ci"]
-    mean_total = results["sample"]["mean_total_sample"]
-    items = [("Total effect $c$", med["total_effect_c"], "total_effect_c"),
-             ("Direct effect $c'$", med["direct"], "direct"),
-             ("Indirect via log GDP\n$a_1 b_{M1}$", med["indirect_via_log_gdp"],
+    items = [("Total association", med["total_effect_c"], "total_effect_c"),
+             ("Direct component", med["direct"], "direct"),
+             ("Indirect via log GDP", med["indirect_via_log_gdp"],
               "indirect_gdp"),
-             ("Indirect via log population\n$a_2 b_{M2}$",
+             ("Indirect via log population",
               med["indirect_via_log_pop"], "indirect_pop")]
     fig, ax = plt.subplots(figsize=(6.5, 3.5))
     ypos = np.arange(len(items))[::-1].astype(float)
@@ -606,14 +607,12 @@ def fig_decomposition(results, path):
                 zorder=2)
         ax.errorbar(val, y, xerr=[[max(val - lo, 0.0)], [max(hi - val, 0.0)]],
                     fmt="none", ecolor="black", elinewidth=1.1, capsize=3, zorder=4)
-        conv = np.expm1(val) * mean_total
-        ax.annotate(f"{val:+.3f}  ({conv:+.1f} medals)", (max(hi, val), y),
-                    textcoords="offset points", xytext=(5, -3), fontsize=8)
+        ax.annotate(f"{val:+.3f}".replace("-", "\N{MINUS SIGN}"), (max(hi, val), y),
+                    textcoords="offset points", xytext=(5, 0), va="center", fontsize=8.5)
     ax.axvline(0, color="#444444", linewidth=0.9, zorder=1)
     ax.set_yticks(ypos)
     ax.set_yticklabels([i[0] for i in items], fontsize=8.5)
-    ax.set_xlabel(r"Effect on $\log(1+\mathrm{medals})$ per Games "
-                  r"(parentheses: $\times$ sample-mean medal count)")
+    ax.set_xlabel(r"Coefficient on $\log(1+\mathrm{medals})$")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.grid(axis="x", color="#DDDDDD", linewidth=0.6, zorder=0)
@@ -663,12 +662,15 @@ def fig_moderation(results, path):
                     fmt="o", color=col, ecolor=col, elinewidth=2.2, capsize=5,
                     capthick=2.2, markersize=7.5, markeredgecolor="white",
                     markeredgewidth=1.1, zorder=4)
-        ax.annotate("%.2f" % est, (x, est), textcoords="offset points",
+        ax.annotate(f"{est:.3f}", (x, est), textcoords="offset points",
                     xytext=(10, -3), ha="left", fontsize=8.5, color="#222222")
     ax.axhline(0, color="#444444", linewidth=0.9, zorder=1)
     ax.set_xticks(xpos)
-    ax.set_xticklabels([f"{l}\nincome tercile" for l, _ in groups], fontsize=8.5)
-    ax.set_ylabel(r"Hosting effect on $\log(1+\mathrm{medals})$")
+    labels = [f"{label}\n" + (rf"$n_\mathrm{{host}}={mfx[key]['host_count']}$"
+                               if "host_count" in mfx[key] else "income tercile")
+              for label, key in groups]
+    ax.set_xticklabels(labels, fontsize=8.5)
+    ax.set_ylabel(r"Hosting association on $\log(1+\mathrm{medals})$")
     ax.set_xlabel("GDP per capita tercile within the same Games edition")
     ax.set_ylim(-0.05, 1.12)
     ax.spines["top"].set_visible(False)
@@ -718,7 +720,7 @@ def run(panel, outdir, n_boot, seed, make_figures, selftest):
 
     results = dict(
         script=Path(__file__).name, seed=seed, selftest=bool(selftest),
-        panel=str(panel), generated_by="python; statsmodels FE via feols.py",
+        panel=panel.name, generated_by="python; statsmodels FE via feols.py",
         sample=meta, methods=methods,
         bootstrap=dict(B=n_boot, unit="country (ioc), resampled with replacement",
                        rng="np.random.default_rng([seed, stream])", streams=STREAMS,
@@ -760,7 +762,8 @@ def run(panel, outdir, n_boot, seed, make_figures, selftest):
     results["consistency_check"] = consistency_check(results["treatment_effect"],
                                                      read_anchors())
     (outdir / "causal_results.json").write_text(json.dumps(results, indent=2))
-    print("consistency check:", results["consistency_check"]["verdict_text"])
+    check = results["consistency_check"]
+    print("consistency check:", check.get("verdict_text", check.get("note")))
 
     if make_figures and not selftest:
         fig_decomposition(results, outdir / "fig_decomposition.pdf")

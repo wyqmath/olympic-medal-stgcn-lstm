@@ -1,91 +1,75 @@
+import argparse
 import json
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
-import os as _os
-import glob as _glob
-import matplotlib.font_manager as _fm
-for _d in (_os.environ.get("OLYMPIC_FONT_DIR", ""),
-           "/usr/share/fonts/truetype/msttcorefonts", "/usr/share/fonts",
-           "/Library/Fonts", "C:/Windows/Fonts"):
-    if _d and _os.path.isdir(_d):
-        for _p in sorted(_glob.glob(_os.path.join(_d, "[Aa]rial*.ttf"))):
-            try:
-                _fm.fontManager.addfont(_p)
-            except Exception:
-                pass
-try:
-    _fm.findfont("Arial", fallback_to_default=False)
-    matplotlib.rcParams["font.family"] = "Arial"
-    matplotlib.rcParams["mathtext.fontset"] = "custom"
-    matplotlib.rcParams["mathtext.rm"] = "Arial"
-    matplotlib.rcParams["mathtext.it"] = "Arial:italic"
-    matplotlib.rcParams["mathtext.bf"] = "Arial:bold"
-except ValueError:
-    pass
 import matplotlib.pyplot as plt
+import numpy as np
+
 
 HERE = Path(__file__).resolve().parent
-SRC = HERE / "gen" / "econometrics_host_dynamic_results.json"
-OUT = HERE / "gen" / "fig_hosting_dynamic.png"
+STYLE = {
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Arial", "Liberation Sans", "DejaVu Sans"],
+        "font.size": 9,
+        "axes.linewidth": 0.8,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+    }
 
-C_POINT = "#0072B2"
-C_REF = "#999999"
-C_BAND = "#56B4E9"
-C_ACCENT = "#D55E00"
+
+def save(fig, path, *, crop=True):
+    fig.savefig(path, dpi=300, facecolor="white", bbox_inches="tight" if crop else None)
+    plt.close(fig)
+    print(path)
+
+
+def draw_event_study(events, path):
+    event_times = [event["k"] for event in events]
+    estimates = [event["delta"] for event in events]
+    lower = [event["ci_lo"] for event in events]
+    upper = [event["ci_hi"] for event in events]
+    fig, ax = plt.subplots(figsize=(7.2, 4.2), layout="constrained")
+    ax.fill_between(event_times, lower, upper, color="#56B4E9", alpha=0.20, linewidth=0)
+    for event in events:
+        k, estimate = event["k"], event["delta"]
+        if event["is_reference"]:
+            ax.plot(k, estimate, "o", ms=7, mfc="white", mec="#999999", mew=1.6, zorder=3)
+            continue
+        lo, hi = event["ci_lo"], event["ci_hi"]
+        ax.errorbar(
+            k, estimate, yerr=[[estimate - lo], [hi - estimate]], fmt="o", ms=5.5,
+            color="#0072B2", elinewidth=1.4, capsize=3.5, zorder=3,
+        )
+        p = event["p"]
+        if p < 0.05:
+            ax.annotate(
+                "**" if p < 0.01 else "*", (k, hi), xytext=(4, 2),
+                textcoords="offset points", fontsize=9, color="#0072B2",
+            )
+    ax.axhline(0, color="#444444", linewidth=0.9, zorder=2)
+    ax.axvline(0, color="#D55E00", linewidth=1.4, linestyle="--", zorder=2)
+    labels = [f"{k}\n({4 * k:+d} yr)".replace("-", "\N{MINUS SIGN}") for k in event_times]
+    labels[event_times.index(0)] = "0\n(0 yr)"
+    ax.set_xticks(event_times, labels, fontsize=8.5)
+    ax.set_xlabel("Event time in Olympic editions relative to hosting")
+    ax.set_ylabel(r"Hosting coefficient $\delta_k$ on $\log(1+\mathrm{medals})$")
+    ax.set_xlim(-3.7, 5.7)
+    ax.set_axisbelow(True)
+    ax.grid(axis="y", color="#DDDDDD", linewidth=0.6)
+    save(fig, path)
 
 
 def main():
-    data = json.loads(SRC.read_text())
-    path = data["path"]
-    k = [d["k"] for d in path]
-    delta = [d["delta"] for d in path]
-    lo = [d["ci_lo"] if d["ci_lo"] is not None else d["delta"] for d in path]
-    hi = [d["ci_hi"] if d["ci_hi"] is not None else d["delta"] for d in path]
-    is_ref = [d.get("is_reference", False) for d in path]
-    p = [d.get("p") for d in path]
-
-    err_lo = [d - l for d, l in zip(delta, lo)]
-    err_hi = [h - d for d, h in zip(delta, hi)]
-
-    fig, ax = plt.subplots(figsize=(7.2, 4.2))
-
-    ax.fill_between(k, lo, hi, color=C_BAND, alpha=0.20, linewidth=0, zorder=1)
-
-    for ki, di, ei_lo, ei_hi, ref, pi in zip(k, delta, err_lo, err_hi, is_ref, p):
-        if ref:
-            ax.plot(ki, di, marker="o", ms=7, mfc="white", mec=C_REF, mew=1.6,
-                    zorder=3, linestyle="none")
-        else:
-            star = "**" if (pi is not None and pi < 0.01) else ("*" if (pi is not None and pi < 0.05) else "")
-            ax.errorbar(ki, di, yerr=[[ei_lo], [ei_hi]], fmt="o", ms=5.5,
-                        color=C_POINT, ecolor=C_POINT, elinewidth=1.4, capsize=3.5,
-                        zorder=3)
-            if star:
-                ax.annotate(star, (ki, hi[k.index(ki)]), textcoords="offset points",
-                            xytext=(4, 2), fontsize=9, color=C_POINT)
-
-    ax.axhline(0, color="#444444", linewidth=0.9, linestyle="-", zorder=2)
-    ax.axvline(0, color=C_ACCENT, linewidth=1.4, linestyle="--", zorder=2)
-
-    ax.set_xticks(k)
-    ax.set_xticklabels([("$_{%d}$" % ki if ki < 0 else "%d" % ki) + "\n(%+d yr)" % (4 * ki)
-                        for ki in k], fontsize=8.5)
-    ax.set_xlabel("Event time $k$ relative to the hosting Games (1 unit = 4 years)")
-    ax.set_ylabel(r"Hosting effect $\delta_k$ on log$(1+$medals$)$")
-    ax.set_xlim(-3.7, 5.7)
-    ax.tick_params(axis="y", labelsize=9)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.grid(axis="y", color="#DDDDDD", linewidth=0.6, zorder=0)
-
-
-    fig.tight_layout()
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(OUT, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    print("wrote", OUT)
+    parser = argparse.ArgumentParser(description="Plot the hosting event-study coefficients.")
+    parser.add_argument("--out", type=Path, default=HERE / "gen" / "fig_hosting_dynamic.png")
+    output = parser.parse_args().out
+    output.parent.mkdir(parents=True, exist_ok=True)
+    events = json.loads((HERE / "gen" / "econometrics_host_dynamic_results.json").read_text(encoding="utf-8"))
+    with plt.rc_context(STYLE):
+        draw_event_study(events["path"], output)
 
 
 if __name__ == "__main__":

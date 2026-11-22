@@ -1,21 +1,41 @@
 # Olympic Medal Prediction with an STGCN-LSTM Model
 
-Code and processed data for the manuscript "STGCN-LSTM for Olympic Medal Prediction: Relational Forecasting and Hosting-Effect Analysis". The model forecasts country-level medal counts with a graph attention network over a country-similarity graph, is evaluated in a leakage-free nested walk-forward design across 13 editions (1976-2024), and the hosting effect is quantified with panel econometrics and causal estimators.
+Code and processed data for the manuscript "STGCN-LSTM for Olympic Medal Prediction: Relational Forecasting and Hosting-Effect Analysis".
 
 ## Layout
 
-- `data/panel_clean.csv` — processed country-edition panel (1896-2024, 1,435 rows), the input to every analysis script
-- `data/summerOly_hosts_with_ioc.csv` — host city/country and IOC code per edition
-- `code/` — all pipeline scripts; outputs are written under `code/gen/`
-
-Scripts: panel construction (`build_panel.py`), the model (`stgcn_predict.py`, `stgcn_variants.py`), the nested walk-forward evaluation (`run_nested_variants.py`, `nested_backtest.py`, `backtest_period.py`), baselines (`baselines_compare.py`), the 2028 projection (`forward_2028.py`), sensitivity and scenarios (`sensitivity_grid.py`, `scenario_gdp.py`, `boundary_by_gdp.py`), econometrics (`feols.py`, `econometrics_*.py`, `causal_host_effect.py`), and the manuscript figures (`fig_*.py`).
+- `data/panel_clean.csv` contains 1,435 delegation-edition observations from 1896 to 2024.
+- `data/summerOly_hosts_with_ioc.csv` supplies the host records for the scenario analysis.
+- `code/` contains the analysis scripts. Outputs are written to `code/gen/`.
 
 ## Data
 
-`data/panel_clean.csv` holds one row per country and Summer Games edition with the medal counts (gold/silver/bronze/total), a host flag, and GDP, GDP per capita and population from the Maddison Project Database 2023 (units in the column names).
-
-The raw sources are not redistributed: the Olympic results files come from MCM 2025 Problem C and are available from COMAP, and the macroeconomic series come from the Maddison Project Database 2023. The panel itself can be reconstructed with `python code/build_panel.py`.
+The panel combines Summer Olympic results from COMAP's 2025 MCM Problem C with GDP and population from the Maddison Project Database 2023. The raw data are available from those sources.
 
 ## Reproducing the results
 
-Run the scripts from `code/`; each writes its outputs under `gen/`. The order is `run_nested_variants.py` → `nested_backtest.py` → `backtest_period.py` → `baselines_compare.py` → `forward_2028.py` → `sensitivity_grid.py` → `scenario_gdp.py` → the `econometrics_*.py` scripts → `causal_host_effect.py` → `boundary_by_gdp.py`, with the `fig_*.py` scripts redrawing the manuscript figures. The neural steps use a GPU when available; the econometric steps are CPU-only. Trained weights are not distributed — every reported number retrains from `data/panel_clean.csv` with the fixed seed set inside the scripts.
+Run the commands from `code/` using the processed panel.
+
+~~~bash
+python run_nested_variants.py --outdir gen/nested/variants
+python nested_backtest.py --no-equivalence-check
+python baselines_compare.py
+python evaluate_tokyo_roc.py
+~~~
+
+Run `fit_tokyo_linked.py` once for each of `plain`, `huber`, `host_huber`, `pure_lstm`, `tt_ensemble`, `tabular`, `xgboost`, and `hgbr`. The first command is `python fit_tokyo_linked.py plain`.
+
+~~~bash
+python rebuild_linked_backtest.py
+python run_ablation.py --threads 8
+python score_ablation.py
+python forward_2028.py
+python sensitivity_grid.py
+python draw_linked_backtest.py
+~~~
+
+`draw_linked_backtest.py` produces Tables 1-2 and Figures 4-5 and S2. `score_ablation.py` produces Tables 3-4. `forward_2028.py` produces the forecasts in Tables 5-6. Run `scenario_gdp.py` for uniform GDP perturbations and `scenario_gdp.py --scope host --outdir gen/scenarios_host` for perturbations limited to the host.
+
+For the hosting analysis, run `econometrics_host_effect.py`, `econometrics_host_dynamic.py`, `econometrics_gdp_break.py`, `econometrics_var_decomp.py`, and `causal_host_effect.py` with Python. Table S4 is written to `gen/host_sample_sensitivity.csv` and Table S5 to `gen/causal/tau_table.csv`. Run `fig_medal2024.py` and `fig_hosting_dynamic.py` for Figures 1 and 7. `causal_host_effect.py` also draws Figures 6 and S1.
+
+Neural models use CUDA when available and can run on CPU. The scripts fit the models from the processed data.

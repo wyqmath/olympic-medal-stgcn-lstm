@@ -45,11 +45,11 @@ def main():
                    mean_total_sample=float(Z["total"].mean()),
                    mean_total_host_rows=float(Z.loc[Z["host_flag"] == 1, "total"].mean()))
         if y == "log1p_total":
-            pct = float(np.exp(row["beta"]) - 1.0)
+            pct = float(np.expm1(row["beta"]))
             host = Z["host_flag"].to_numpy()
             yhat0 = res.fittedvalues - row["beta"] * host
             row.update(pct_effect=pct,
-                       medals_per_typical_country=pct * row["mean_total_sample"],
+                       medals_per_typical_country=pct * (row["mean_total_sample"] + 1),
                        medals_att_hosted=float(np.mean(
                            np.expm1(yhat0[host == 1] + row["beta"])
                            - np.expm1(yhat0[host == 1]))))
@@ -92,8 +92,6 @@ def main():
     dfm = df[df["year"] >= 1976].copy()
     out["specs"]["A5_level_1976_2024"] = ols("A5_level_1976_2024", dfm, "total")
     out["specs"]["A6_log1p_1976_2024"] = ols("A6_log1p_1976_2024", dfm, "log1p_total")
-
-    out["paper_claim"] = {"host_effect_medals": 2.3, "source": "main.tex L656"}
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(out, indent=2))

@@ -3,7 +3,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import statsmodels.api as sm
 
 import feols
 
@@ -13,6 +12,7 @@ np.random.seed(SEED)
 HERE = Path(__file__).resolve().parent
 PANEL = HERE.parent / "data" / "panel_clean.csv"
 OUT = HERE / "gen" / "econometrics_host_dynamic_results.json"
+SENSITIVITY = OUT.with_name("host_sample_sensitivity.csv")
 
 YEAR_MIN, YEAR_MAX = 1976, 2024
 KMIN, KMAX, KREF = -3, 5, -1
@@ -35,6 +35,41 @@ def run(df, controls=True, kref=KREF):
     extra = list(D.columns) + (["log_gdp", "log_pop"] if controls else [])
     res, Z, info = feols.fe_ols(dfa, "log1p_total", extra=extra, interest=list(D.columns))
     return res, D, Z, info, n_single
+
+
+def pre_trend_test(res):
+    lead_names = [f"D_m{-k}" for k in range(KMIN, KREF)]
+    test = res.wald_test(", ".join(f"{name} = 0" for name in lead_names),
+                         use_f=True, scalar=True)
+    return dict(F=float(test.statistic), p=float(test.pvalue),
+                df_num=float(test.df_num), df_den=float(test.df_denom),
+                leads_tested=lead_names)
+
+
+def sample_sensitivity(df, full_dynamic):
+    samples = (
+        ("Full modern window", df),
+        ("Excluding 1980 and 1984", df.loc[~df["year"].isin([1980, 1984])]),
+        ("Excluding United States", df.loc[df["ioc"] != "USA"]),
+    )
+    rows = []
+    for label, sample in samples:
+        static_df, _ = feols.drop_singletons(sample)
+        static, _, _ = feols.fe_ols(static_df, "log1p_total",
+                                    extra=("host_flag",), interest=("host_flag",))
+        dynamic = full_dynamic if sample is df else run(sample)[0]
+        row = dict(sample=label, static_n=int(static.nobs), dynamic_n=int(dynamic.nobs))
+        for prefix, model, term in (
+            ("static_host", static, "host_flag"),
+            ("hosting_year", dynamic, "D_0"),
+            ("fifth_edition", dynamic, "D_5"),
+        ):
+            estimate = feols.summary_row(model, term)
+            row.update({f"{prefix}_{key}": estimate[key]
+                        for key in ("beta", "ci_lo", "ci_hi", "p")})
+        row["pre_trend_p"] = pre_trend_test(dynamic)["p"]
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def shares_of(delta_by_k):
@@ -71,11 +106,7 @@ def main():
     res, D, Z, info, n_single = run(df, controls=True)
     res_raw, _, Zr, _, _ = run(df, controls=False)
 
-    lead_names = [f"D_m{-k}" for k in range(KMIN, KREF)]
-    wt = res.wald_test(", ".join(f"{n} = 0" for n in lead_names), use_f=True)
-    pretest = dict(F=float(np.squeeze(wt.statistic)), p=float(np.squeeze(wt.pvalue)),
-                   df_num=float(wt.df_num), df_den=float(wt.df_denom),
-                   leads_tested=lead_names)
+    pretest = pre_trend_test(res)
 
     rows = []
     for k in range(KMIN, KMAX + 1):
@@ -91,7 +122,7 @@ def main():
                          games=int(4 * k) if k else 0))
     path = pd.DataFrame(rows)
     mean_total = float(Z["total"].mean())
-    path["delta_medals_at_sample_mean"] = np.expm1(path["delta"].fillna(0.0)) * mean_total
+    path["delta_medals_at_sample_mean"] = np.expm1(path["delta"]) * (mean_total + 1)
 
     d_by_k = {int(r.k): float(r.delta) for r in path.itertuples()}
     signed = shares_of(d_by_k)
@@ -132,11 +163,10 @@ def main():
         path_kref_minus3=json.loads(pd.DataFrame(
             [{"k": k, "delta": v} for k, v in alt_by_k.items()]).to_json(orient="records")),
         mean_total_sample=mean_total,
-        identification=info,
-        paper_old_values=dict(leading=0.38, current=0.41, legacy=0.21,
-                              source="main.tex L568, L592-594"))
+        identification=info)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(out, indent=2))
+    sample_sensitivity(df, res).to_csv(SENSITIVITY, index=False)
 
     print(out["sample"])
     print(path.to_string(index=False, formatters={
@@ -152,6 +182,7 @@ def main():
     print("kref=-3 shares:", {k: round(v, 4) for k, v in signed_kref_m3.items()})
     print("kref=-3 path:", {k: round(v, 4) for k, v in alt_by_k.items()})
     print("wrote", OUT)
+    print("wrote", SENSITIVITY)
 
 
 if __name__ == "__main__":

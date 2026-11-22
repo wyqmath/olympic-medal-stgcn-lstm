@@ -642,8 +642,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--variants", default="base,V1,V2,V3,V4,V5,V6")
-    ap.add_argument("--panel",
-                    default=os.path.join(HERE, os.pardir, "data", "panel_clean.csv"))
+    ap.add_argument("--panel", default=sp.PANEL_PATH)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--threads", type=int, default=0, help="torch.set_num_threads (0 = default)")
     ap.add_argument("--max-epochs", type=int, default=0)

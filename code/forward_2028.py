@@ -29,7 +29,7 @@ import nested_backtest as nb
 GEN = os.path.join(HERE, "gen")
 DATA_DIR = os.path.join(HERE, os.pardir, "data")
 DEFAULT_PANEL = os.path.join(DATA_DIR, "panel_clean.csv")
-DEFAULT_VARIANTS_DIR = os.path.join(GEN, "nested", "variants")
+DEFAULT_SELECTION = os.path.join(GEN, "linked_backtest", "forward_selection.json")
 DEFAULT_OUTDIR = os.path.join(GEN, "forward2028")
 
 FORWARD_YEAR = 2028
@@ -240,11 +240,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--panel", default=DEFAULT_PANEL)
-    ap.add_argument("--variants-dir", default=DEFAULT_VARIANTS_DIR,
-                    help="directory with the seven nested predictions_{base,V1..V6}.csv")
+    selection = ap.add_mutually_exclusive_group()
+    selection.add_argument("--selection", default=DEFAULT_SELECTION,
+                           help="2028 selection JSON from rebuild_linked_backtest.py")
+    selection.add_argument("--variants-dir",
+                           help="select from an explicit directory of seven prediction CSVs")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--reps", type=int, default=B_REPS,
-                    help=f"country-cluster bootstrap replicates (frozen: {B_REPS})")
+                    help=f"number of binary delegation-mask refits (default: {B_REPS})")
     ap.add_argument("--max-epochs", type=int, default=0, help="smoke run: cap the epochs")
     ap.add_argument("--outdir", default=DEFAULT_OUTDIR)
     args = ap.parse_args()
@@ -271,7 +274,17 @@ def main() -> int:
         f"NOCs with medals in {base_year}; defunct/discontinued NOCs stay in "
         f"predictions_point.csv (active_2024 column) for completeness")
 
-    sel = select_variant_2028(_abs_path(args.variants_dir), log=log)
+    if args.variants_dir:
+        sel = select_variant_2028(_abs_path(args.variants_dir), log=log)
+    else:
+        selection_path = _abs_path(args.selection)
+        if not os.path.isfile(selection_path):
+            ap.error("Run rebuild_linked_backtest.py to select the 2028 configuration")
+        with open(selection_path, encoding="utf-8") as file:
+            sel = json.load(file)
+        if sel.get("year") != FORWARD_YEAR or sel.get("fallback") or sel.get("winner") not in sv.VARIANTS:
+            ap.error("The selection file does not specify an eligible 2028 configuration")
+        log(f"[select] {FORWARD_YEAR}: {sel['winner']}")
     tag = sel["winner"]
 
     t0 = time.time()
@@ -375,8 +388,7 @@ def main() -> int:
 
     summary = dict(
         protocol=dict(
-            document="nested selection rules F2/F3 (see nested_backtest.py); "
-                     "forward procedure frozen in this file's docstring",
+            document="Nested walk-forward selection and delegation subsampling",
             forward_year=FORWARD_YEAR,
             selection=dict(tol_pp=nb.DEFAULT_TOL_PP,
                            parsimony_order=list(nb.PARSIMONY_ORDER),
@@ -402,14 +414,11 @@ def main() -> int:
                             f"{base_year}; defunct/discontinued NOCs retained in full "
                             "predictions_point.csv (active_2024 column) for completeness "
                             "but excluded from paper tables"),
-            uncertainty=dict(method="country-cluster bootstrap of the winner pipeline",
+            uncertainty=dict(method="binary delegation-mask refits",
                              reps=int(args.reps), seed=RNG_SEED, rng=boot_info["rng"],
                              mask_rule=boot_info["mask_rule"],
                              percentiles=list(CI_PERCENTILES),
-                             note="B=64 resolves a 95% interval coarsely; reported as is",
-                             semantics="intervals reflect training-resampling (cluster "
-                                       "bootstrap) uncertainty, not calibrated prediction "
-                                       "intervals",
+                             semantics="empirical variation across delegation-mask refits",
                              seconds_total=boot_info["seconds_total"],
                              seconds_mean=boot_info["seconds_mean"]),
             aggregate_check=aggregate_check,

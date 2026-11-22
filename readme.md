@@ -1,6 +1,6 @@
-# Olympic Medal Prediction with an STGCN-LSTM Model
+# Code and Data
 
-Code and processed data for the manuscript "STGCN-LSTM for Olympic Medal Prediction: Relational Forecasting and Hosting-Effect Analysis".
+Code and processed data for forecasting Summer Olympic medal totals and analyzing hosting effects. The repository includes historical backtests, model comparisons, and component ablations.
 
 ## Layout
 

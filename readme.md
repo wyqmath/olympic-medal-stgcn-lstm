@@ -34,8 +34,18 @@ python sensitivity_grid.py
 python draw_linked_backtest.py
 ~~~
 
-`draw_linked_backtest.py` produces Tables 1-2 and Figures 4-5 and S2. `score_ablation.py` produces Tables 3-4. `forward_2028.py` produces the forecasts in Tables 5-6. Run `scenario_gdp.py` for uniform GDP perturbations and `scenario_gdp.py --scope host --outdir gen/scenarios_host` for perturbations limited to the host.
+For GDP sensitivity and hosting analysis, run:
 
-For the hosting analysis, run `econometrics_host_effect.py`, `econometrics_host_dynamic.py`, `econometrics_gdp_break.py`, `econometrics_var_decomp.py`, and `causal_host_effect.py` with Python. Table S4 is written to `gen/host_sample_sensitivity.csv` and Table S5 to `gen/causal/tau_table.csv`. Run `fig_medal2024.py` and `fig_hosting_dynamic.py` for Figures 1 and 7. `causal_host_effect.py` also draws Figures 6 and S1.
+~~~bash
+python scenario_gdp.py
+python scenario_gdp.py --scope host --outdir gen/scenarios_host
+python econometrics_host_effect.py
+python econometrics_host_dynamic.py
+python econometrics_gdp_break.py
+python econometrics_var_decomp.py
+python causal_host_effect.py
+python fig_medal2024.py
+python fig_hosting_dynamic.py
+~~~
 
 Neural models use CUDA when available and can run on CPU. The scripts fit the models from the processed data.
